@@ -5,9 +5,11 @@ import random
 import heapq
 import time
 import copy
-import ast
-import pickle
+import sqlite3
 
+conn = sqlite3.connect('hex.db')
+#conn = sqlite3.connect(':memory:')
+c = conn.cursor()
 BOARD_SIZE = 4
 
 class bcolors:
@@ -110,9 +112,9 @@ class Hex:
 		self.current_run_board_states_red = {}
 		self.current_run_board_states_blue = {}
 
-		self.state_dictionary = STATES
+		#self.state_dictionary = STATES
 
-	def run(self, red, blue, lr=0.001, verbose=True):
+	def run(self, red, blue, lr=0.01, verbose=True):
 		winner = False
 		turn = 'B'
 		num_turns = 0
@@ -128,27 +130,38 @@ class Hex:
 				move = self.get_move_from_click()
 			else:
 				move = self.run_lri(turn, self.b.board)
-
 			self.play_move(move, turn)
 			winner = self.is_win_state()
 			if winner:
-				count = 0
+				columns = '('+','.join('?' for _ in range(BOARD_SIZE**2+1))+')'
 				if winner == 'B':
 					for i in self.current_run_board_states_blue.keys():
-						new_probs = self.lri(list(x['p'] for x in self.state_dictionary[i]), self.current_run_board_states_blue[i][0], lr+3**count/100, self.current_run_board_states_blue[i][1])
-						count+=1
-						for j in range(len(self.state_dictionary[i])):
-							self.state_dictionary[i][j]['p'] = new_probs[j]
+						c.execute("SELECT * FROM states WHERE state='%s'" % str(i).replace("\'",""))
+
+						entry = c.fetchone()
+						#print(entry[1:])
+						new_probs = self.lri(list(entry[1:]), self.current_run_board_states_blue[i][0], lr, self.current_run_board_states_blue[i][1])
+						#print(new_probs)
+						#print("\/ incorrect")
+						#print([entry[0]]+new_probs)
+
+						c.execute("INSERT OR REPLACE INTO states VALUES "+columns, ([entry[0]] + new_probs))
 				else:
 					for i in self.current_run_board_states_red.keys():
-						new_probs = self.lri(list(x['p'] for x in self.state_dictionary[i]), self.current_run_board_states_red[i][0], lr+count**2/100, self.current_run_board_states_red[i][1])
-						count+=1
-						for j in range(len(self.state_dictionary[i])):
-							self.state_dictionary[i][j]['p'] = new_probs[j]
+						c.execute("SELECT * FROM states WHERE state='%s'" % str(i).replace("\'",""))
+						entry = c.fetchone()
+						#print(entry[1:])
+
+						new_probs = self.lri(list(entry[1:]), self.current_run_board_states_red[i][0], lr, self.current_run_board_states_red[i][1])
+						#print("\/ incorrect")
+						#print([entry[0]]+new_probs)
+						#print(new_probs)
+						#print([entry[0].split()])
+						c.execute("INSERT OR REPLACE INTO states VALUES "+columns, ([entry[0]] + new_probs))
 
 
 				#t = time.time()
-				STATES = self.state_dictionary # update global variable
+				#STATES = self.state_dictionary # update global variable
 				#print("subtime = " + str(round(time.time()-t,5)) + " seconds")
 				
 				
@@ -281,14 +294,6 @@ class Hex:
 	def flatten_board(self, board):
 		return tuple([item for sublist in board for item in sublist])
 
-	def heuristic1(self, player, board):
-		flat_board = self.flatten_board(board)
-
-		if flat_board in self.state_dictionary:
-			return self.state_dictionary[flat_board]
-		else:
-			return 50+random.random()
-
 	def lri(self, probabilities, i, alpha, R=4):
 		probabilities[i] += alpha * (1 - probabilities[i])
 		for j in (y for y in range(R) if y != i):
@@ -299,27 +304,36 @@ class Hex:
 
 	def run_lri(self, player, board):
 		flat_board = self.flatten_board(board)
-
-		if flat_board in self.state_dictionary:
-			probabilities = self.state_dictionary[flat_board]
+		c.execute("SELECT * FROM states WHERE state='%s'" % str(flat_board).replace("\'",""))
+		result = c.fetchone()
+		if result:
+			probabilities = result[1:]
 		else:
 			probabilities = []
 			possible_moves = self.possible_moves(board)
-			for i in possible_moves:
-				probabilities.append({'m': i, 'p': round(1/len(possible_moves),5)})
-				#probabilities.append({'m': i, 'p': 1/len(possible_moves)})
-			self.state_dictionary[flat_board] = probabilities
+			for i in range(BOARD_SIZE**2):
+				if tuple((i//BOARD_SIZE, i%BOARD_SIZE)) in possible_moves:
+					probabilities.append(round(1/len(possible_moves),5))
+				else:
+					probabilities.append(0)
+
+			columns = '('+','.join('?' for _ in range(BOARD_SIZE**2+1))+')'
+
+			#print("\/ correct")
+			#print([str(flat_board).replace("\'","")] + probabilities)
+			c.execute("INSERT OR REPLACE INTO states VALUES "+columns, ([str(flat_board).replace("\'","")] + probabilities))
 
 		n = random.random()
 		for i in range(len(probabilities)):
-			n -= probabilities[i]['p']
+			n -= probabilities[i]
 			if n <= 0:
 				if player == 'R': 
 					self.current_run_board_states_red[flat_board] = (i, len(probabilities))
 				else:
 					self.current_run_board_states_blue[flat_board] = (i, len(probabilities))
-				return probabilities[i]['m']
-		return probabilities[len(probabilities)-1]['m'] # if truncation breaks code return last value
+				#print("made it here")
+				return (i//BOARD_SIZE, i%BOARD_SIZE)
+		return (BOARD_SIZE-1, BOARD_SIZE-1) # if truncation breaks code return last value
 
 	def possible_moves(self, board):
 		moves = []
@@ -329,6 +343,13 @@ class Hex:
 		return moves
 
 def main():
+	
+	c.execute("DROP TABLE states;")
+	c.execute("CREATE TABLE IF NOT EXISTS states (state varchar(255) primary key);")
+	for i in range(BOARD_SIZE):
+		for j in range(BOARD_SIZE):
+			c.execute("ALTER TABLE states ADD `%s%s` real" % (i,j))
+	
 	while True:
 		p1 = input("\nWho is playing as RED?\n  1. Human\n  2. AI\n")
 		#p1 = 2
@@ -361,17 +382,16 @@ def main():
 
 	results = []
 
+	track_after = 1000
+
 	if learn == '1':
 		for i in range(iterations):
-			if i % 1000 == 0: t = time.time()
+			if i % track_after == 0: t = time.time()
 			b = Board((BOARD_SIZE,BOARD_SIZE))
 			h = Hex(b, None)
-			#t = time.time()
 			h.run(p1, p2, verbose=False)
 			#print("subtime = " + str(round(time.time()-t,2)) + " seconds")
-			if i % 1000 == 999: print(str(round((i+1)/iterations*100,2)) +"% - 1000 games took " + str(round(time.time()-t, 2)) + " seconds.\n")
-		with open('states.pkl', 'w') as f:
-			f.write(str(STATES))
+			if i % track_after == track_after-1: print(str(round((i+1)/iterations*100,2)) +"% - "+str(track_after)+" games took " + str(round(time.time()-t, 2)) + " seconds.\n")
 	else:
 		for _ in range(iterations):
 			b = Board((BOARD_SIZE,BOARD_SIZE))
@@ -384,29 +404,27 @@ def main():
 			for i in range(len(results)):
 				if results[i] == 'R': r_count+=1
 			print("red last 10 win% = " + str(100*r_count/min(10, len(results)))+ "%")
-		with open('states.pkl', 'w') as f:
-			pickle.dump(STATES, f)
 
-STATES = None
+	conn.commit()
+	conn.close()
+
 
 if __name__ == '__main__':
+	#with open('states.pkl', 'rb') as f:
+	#t = time.time()
 
-	with open('states.pkl', 'rb') as f:
-		t = time.time()
+	#print(time.time()-t)
+	try:
+		main()
+	except KeyboardInterrupt:
+		conn.commit()
+		conn.close()
+		#print("saving states, do not exit until this is done...")
+		#with open('states.pkl', 'wb') as f:
+		#	dill.dump(STATES, f)
+
+		print('done')
 		try:
-			STATES = pickle.load(f)
-		except:
-			STATES = {}
-
-		print(time.time()-t)
-		try:
-			main()
-		except KeyboardInterrupt:
-			with open('states.pkl', 'wb') as f:
-				pickle.dump(STATES, f)
-
-			print('Interrupted')
-			try:
-				sys.exit(0)
-			except SystemExit:
-				os._exit(0)
+			sys.exit(0)
+		except SystemExit:
+			os._exit(0)
