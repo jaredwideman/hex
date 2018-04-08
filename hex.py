@@ -6,11 +6,13 @@ import heapq
 import time
 import copy
 import sqlite3
+from multiprocessing.dummy import Pool as ThreadPool 
+from itertools import repeat
 
-conn = sqlite3.connect('hex.db')
+#conn = sqlite3.connect('hex.db')
 #conn = sqlite3.connect(':memory:')
-c = conn.cursor()
-BOARD_SIZE = 4
+#c = conn.cursor()
+BOARD_SIZE = 3
 
 class bcolors:
 	RED = '\033[91m'
@@ -36,7 +38,6 @@ class Graphics:
 		self.win = GraphWin(width = 860, height = 860, autoflush=False)
 		self.board = board
 		self.update_board(board)
-		#self.win.getMouse()
 
 	def clear(self, win):
 		for item in win.items[:]:
@@ -78,7 +79,6 @@ class Graphics:
 					for k in hex.getPoints():
 						hex_points.append((k.x, k.y))
 					if s.Point(p1).within(s.Polygon(hex_points)):
-						#print((i,j))
 						return (i,j)
 
 		return False
@@ -106,25 +106,19 @@ class Graphics:
 		return rotated_ploygon
 
 class Hex:
-	def __init__(self, b, graphics):
+	def __init__(self, b, cur, graphics):
 		self.b = b
 		self.graphics = graphics
+		self.cur = cur
 		self.current_run_board_states_red = {}
 		self.current_run_board_states_blue = {}
 
-		#self.state_dictionary = STATES
-
-	def run(self, red, blue, lr=0.01, verbose=True):
+	def run(self, red, blue, lr=0.1, verbose=True):
 		winner = False
 		turn = 'B'
 		num_turns = 0
 		while not winner:
 			num_turns+=1
-			if verbose:
-				if turn == 'B':
-					pass#print("\nIt's "+bcolors.BLUE+'█'+bcolors.BLACK+"\'s  turn!")
-				else:
-					pass#print("\nIt's "+bcolors.RED+'█'+bcolors.BLACK+"\'s  turn!")
 
 			if turn == 'R' and red == '1' or turn == 'B' and blue == '1':
 				move = self.get_move_from_click()
@@ -134,40 +128,24 @@ class Hex:
 			winner = self.is_win_state()
 			if winner:
 				columns = '('+','.join('?' for _ in range(BOARD_SIZE**2+1))+')'
+				count=0
 				if winner == 'B':
 					for i in self.current_run_board_states_blue.keys():
-						c.execute("SELECT * FROM states WHERE state='%s'" % str(i).replace("\'",""))
-
-						entry = c.fetchone()
-						#print(entry[1:])
-						new_probs = self.lri(list(entry[1:]), self.current_run_board_states_blue[i][0], lr, self.current_run_board_states_blue[i][1])
-						#print(new_probs)
-						#print("\/ incorrect")
-						#print([entry[0]]+new_probs)
-
-						c.execute("INSERT OR REPLACE INTO states VALUES "+columns, ([entry[0]] + new_probs))
+						count+=1
+						self.cur.execute("SELECT * FROM states WHERE state='%s'" % str(i).replace("\'",""))
+						entry = self.cur.fetchone()
+						new_probs = self.lri(list(entry[1:]), self.current_run_board_states_blue[i][0], lr**(-count/100)-1, self.current_run_board_states_blue[i][1])
+						self.cur.execute("INSERT OR REPLACE INTO states VALUES "+columns, ([entry[0]] + new_probs))
 				else:
 					for i in self.current_run_board_states_red.keys():
-						c.execute("SELECT * FROM states WHERE state='%s'" % str(i).replace("\'",""))
-						entry = c.fetchone()
-						#print(entry[1:])
-
-						new_probs = self.lri(list(entry[1:]), self.current_run_board_states_red[i][0], lr, self.current_run_board_states_red[i][1])
-						#print("\/ incorrect")
-						#print([entry[0]]+new_probs)
-						#print(new_probs)
-						#print([entry[0].split()])
-						c.execute("INSERT OR REPLACE INTO states VALUES "+columns, ([entry[0]] + new_probs))
-
-
-				#t = time.time()
-				#STATES = self.state_dictionary # update global variable
-				#print("subtime = " + str(round(time.time()-t,5)) + " seconds")
-				
+						count+=1
+						self.cur.execute("SELECT * FROM states WHERE state='%s'" % str(i).replace("\'",""))
+						entry = self.cur.fetchone()
+						new_probs = self.lri(list(entry[1:]), self.current_run_board_states_red[i][0], lr**(-count/100)-1, self.current_run_board_states_red[i][1])
+						self.cur.execute("INSERT OR REPLACE INTO states VALUES "+columns, ([entry[0]] + new_probs))
 				
 				if verbose: print(winner+" wins!")
 				
-
 			turn = 'R' if turn == 'B' else 'B'
 		return winner
 
@@ -272,14 +250,7 @@ class Hex:
 			
 	def play_move(self, move, player, execute=True):
 		if execute == True:
-			try:
-				self.b.board[move[0]][move[1]] = player
-			except:
-				print(move)
-				print(move[0])
-				print(move[1])
-				print(self.b.board)
-
+			self.b.board[move[0]][move[1]] = player
 			if self.graphics: self.graphics.update_board(self.b)
 			return True
 		else:
@@ -300,12 +271,11 @@ class Hex:
 			probabilities[j] -= alpha * probabilities[j]
 
 		return [round(x,5) for x in probabilities]
-		#return probabilities
 
 	def run_lri(self, player, board):
 		flat_board = self.flatten_board(board)
-		c.execute("SELECT * FROM states WHERE state='%s'" % str(flat_board).replace("\'",""))
-		result = c.fetchone()
+		self.cur.execute("SELECT * FROM states WHERE state='%s'" % str(flat_board).replace("\'",""))
+		result = self.cur.fetchone()
 		if result:
 			probabilities = result[1:]
 		else:
@@ -319,9 +289,7 @@ class Hex:
 
 			columns = '('+','.join('?' for _ in range(BOARD_SIZE**2+1))+')'
 
-			#print("\/ correct")
-			#print([str(flat_board).replace("\'","")] + probabilities)
-			c.execute("INSERT OR REPLACE INTO states VALUES "+columns, ([str(flat_board).replace("\'","")] + probabilities))
+			self.cur.execute("INSERT OR REPLACE INTO states VALUES "+columns, ([str(flat_board).replace("\'","")] + probabilities))
 
 		n = random.random()
 		for i in range(len(probabilities)):
@@ -331,7 +299,6 @@ class Hex:
 					self.current_run_board_states_red[flat_board] = (i, len(probabilities))
 				else:
 					self.current_run_board_states_blue[flat_board] = (i, len(probabilities))
-				#print("made it here")
 				return (i//BOARD_SIZE, i%BOARD_SIZE)
 		return (BOARD_SIZE-1, BOARD_SIZE-1) # if truncation breaks code return last value
 
@@ -342,13 +309,16 @@ class Hex:
 				if board[i][j] == 0: moves.append((i,j))
 		return moves
 
+
 def main():
-	
-	c.execute("DROP TABLE states;")
-	c.execute("CREATE TABLE IF NOT EXISTS states (state varchar(255) primary key);")
+	"""
+	self.cur.execute("DROP TABLE states;")
+	self.cur.execute("CREATE TABLE IF NOT EXISTS states (state varchar(255) primary key);")
 	for i in range(BOARD_SIZE):
 		for j in range(BOARD_SIZE):
-			c.execute("ALTER TABLE states ADD `%s%s` real" % (i,j))
+			self.cur.execute("ALTER TABLE states ADD `%s%s` real" % (i,j))
+	"""
+
 	
 	while True:
 		p1 = input("\nWho is playing as RED?\n  1. Human\n  2. AI\n")
@@ -378,13 +348,19 @@ def main():
 	else:
 		learn = 2
 
-	iterations = 500000
+	iterations = 5000000
 
 	results = []
 
 	track_after = 1000
 
 	if learn == '1':
+		with sqlite3.connect('hex.db') as conn:
+			games = [Board((BOARD_SIZE, BOARD_SIZE)) for _ in range(1000)]
+			pool = ThreadPool(10) 
+			M = pool.starmap(start_threading, zip(games, repeat(conn)))
+			#pool.map(start_threading, games)
+		"""
 		for i in range(iterations):
 			if i % track_after == 0: t = time.time()
 			b = Board((BOARD_SIZE,BOARD_SIZE))
@@ -392,6 +368,7 @@ def main():
 			h.run(p1, p2, verbose=False)
 			#print("subtime = " + str(round(time.time()-t,2)) + " seconds")
 			if i % track_after == track_after-1: print(str(round((i+1)/iterations*100,2)) +"% - "+str(track_after)+" games took " + str(round(time.time()-t, 2)) + " seconds.\n")
+		"""
 	else:
 		for _ in range(iterations):
 			b = Board((BOARD_SIZE,BOARD_SIZE))
@@ -405,23 +382,22 @@ def main():
 				if results[i] == 'R': r_count+=1
 			print("red last 10 win% = " + str(100*r_count/min(10, len(results)))+ "%")
 
-	conn.commit()
-	conn.close()
+	
+
+def start_threading(board, conn):
+		cur = conn.cursor()
+		h = Hex(board, cur, None)
+		h.run(2, 2, verbose=False,)
+		conn.commit()
+		#conn.close()
 
 
 if __name__ == '__main__':
-	#with open('states.pkl', 'rb') as f:
-	#t = time.time()
-
-	#print(time.time()-t)
 	try:
 		main()
 	except KeyboardInterrupt:
 		conn.commit()
 		conn.close()
-		#print("saving states, do not exit until this is done...")
-		#with open('states.pkl', 'wb') as f:
-		#	dill.dump(STATES, f)
 
 		print('done')
 		try:
