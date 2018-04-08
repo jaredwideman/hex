@@ -6,6 +6,7 @@ import heapq
 import time
 import copy
 import sqlite3
+<<<<<<< HEAD
 from multiprocessing.dummy import Pool as ThreadPool 
 from itertools import repeat
 
@@ -113,7 +114,8 @@ class Hex:
 		self.current_run_board_states_red = {}
 		self.current_run_board_states_blue = {}
 
-	def run(self, red, blue, lr=0.1, verbose=True):
+
+	def run(self, red, blue, lr=0.01, verbose=True):
 		winner = False
 		turn = 'B'
 		num_turns = 0
@@ -128,6 +130,7 @@ class Hex:
 			winner = self.is_win_state()
 			if winner:
 				columns = '('+','.join('?' for _ in range(BOARD_SIZE**2+1))+')'
+
 				count=0
 				if winner == 'B':
 					for i in self.current_run_board_states_blue.keys():
@@ -143,6 +146,7 @@ class Hex:
 						entry = self.cur.fetchone()
 						new_probs = self.lri(list(entry[1:]), self.current_run_board_states_red[i][0], lr**(-count/100)-1, self.current_run_board_states_red[i][1])
 						self.cur.execute("INSERT OR REPLACE INTO states VALUES "+columns, ([entry[0]] + new_probs))
+
 				
 				if verbose: print(winner+" wins!")
 				
@@ -276,6 +280,7 @@ class Hex:
 		flat_board = self.flatten_board(board)
 		self.cur.execute("SELECT * FROM states WHERE state='%s'" % str(flat_board).replace("\'",""))
 		result = self.cur.fetchone()
+
 		if result:
 			probabilities = result[1:]
 		else:
@@ -291,6 +296,7 @@ class Hex:
 
 			self.cur.execute("INSERT OR REPLACE INTO states VALUES "+columns, ([str(flat_board).replace("\'","")] + probabilities))
 
+
 		n = random.random()
 		for i in range(len(probabilities)):
 			n -= probabilities[i]
@@ -299,6 +305,7 @@ class Hex:
 					self.current_run_board_states_red[flat_board] = (i, len(probabilities))
 				else:
 					self.current_run_board_states_blue[flat_board] = (i, len(probabilities))
+
 				return (i//BOARD_SIZE, i%BOARD_SIZE)
 		return (BOARD_SIZE-1, BOARD_SIZE-1) # if truncation breaks code return last value
 
@@ -368,6 +375,7 @@ def main():
 			h.run(p1, p2, verbose=False)
 			#print("subtime = " + str(round(time.time()-t,2)) + " seconds")
 			if i % track_after == track_after-1: print(str(round((i+1)/iterations*100,2)) +"% - "+str(track_after)+" games took " + str(round(time.time()-t, 2)) + " seconds.\n")
+
 		"""
 	else:
 		for _ in range(iterations):
@@ -381,8 +389,6 @@ def main():
 			for i in range(len(results)):
 				if results[i] == 'R': r_count+=1
 			print("red last 10 win% = " + str(100*r_count/min(10, len(results)))+ "%")
-
-	
 
 def start_threading(board, conn):
 		cur = conn.cursor()
@@ -398,7 +404,6 @@ if __name__ == '__main__':
 	except KeyboardInterrupt:
 		conn.commit()
 		conn.close()
-
 		print('done')
 		try:
 			sys.exit(0)
