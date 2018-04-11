@@ -10,11 +10,10 @@ import sqlite3
 from multiprocessing.dummy import Pool as ThreadPool 
 import threading
 
-conn = sqlite3.connect('hex.db', check_same_thread=False)
-c = conn.cursor()
+
 lock = threading.Lock()
 
-BOARD_SIZE = 4
+BOARD_SIZE = 3
 
 class bcolors:
 	RED = '\033[91m'
@@ -115,70 +114,70 @@ class Hex:
 		self.current_run_board_states_red = {}
 		self.current_run_board_states_blue = {}
 
-	def run(self, red=2, blue=2, lr=0.001, verbose=True):
+	def run(self, conn, red=2, blue=2, lr=0.001, verbose=True):
+		t = time.time()
+		c = conn.cursor()
 		winner = False
 		turn = 'B'
 		num_turns = 0
 		while not winner:
 			num_turns+=1
-
 			if turn == 'R' and red == '1' or turn == 'B' and blue == '1':
 				move = self.get_move_from_click()
 			else:
-				move = self.run_lri(turn, self.b.board)
+				move = self.run_lri(turn, self.b.board, c)
 			self.play_move(move, turn)
 			winner = self.is_win_state()
 			if winner:
 				if winner == 'B':
 					args = [str(x).replace('\'','') for x in list(self.current_run_board_states_blue.keys())]
-					#print(args)
 					sql = "SELECT * FROM states WHERE state in ({seq})".format(seq=','.join(['?']*len(args)))
 					try:
-						lock.acquire(True)
+						#lock.acquire(True)
 						c.execute(sql, args)
 						entries = c.fetchall()
 					finally:
-						lock.release()
-					#print(entries)
+						pass#lock.release()
 
-					new_probs = []
-					
+					args = []
 					for i in range(len(entries)):
-						new_probs.append(self.lri(list(entries[i][1:]), list(self.current_run_board_states_blue.keys())[i][0], lr, list(self.current_run_board_states_blue.keys())[i][1]))
+						args.append([entries[i][0]] + self.lri(list(entries[i][1:]), self.current_run_board_states_blue[list(self.current_run_board_states_blue.keys())[i]][0], lr, BOARD_SIZE**2))
 
-					args = new_probs
-					sql = "INSERT OR REPLACE INTO states VALUES ({seq})".format(seq=','.join(['?']*len(args)))
+					sql = "INSERT OR REPLACE INTO states VALUES ({seq})".format(seq=','.join(['?']*(BOARD_SIZE**2+1)))
 					try:
-						lock.acquire(True)
-						c.execute(sql, args)
+						#ock.acquire(True)
+						c.executemany(sql, args)
 					finally:
-						lock.release()
+						pass#lock.release()
 				else:
 					args = [str(x).replace('\'','') for x in list(self.current_run_board_states_blue.keys())]
 					sql = "SELECT * FROM states WHERE state in ({seq})".format(seq=','.join(['?']*len(args)))
 					try:
-						lock.acquire(True)
+						#lock.acquire(True)
 						c.execute(sql, args)
 						entries = c.fetchall()
 					finally:
-						lock.release()
+						pass#lock.release()
 
-					new_probs = []
+					args = []
+
 					for i in range(len(entries)):
-						new_probs.append(self.lri(list(entries[i][1:]), list(self.current_run_board_states_red.keys())[i][0], lr, list(self.current_run_board_states_red.keys())[i][1]))
+						args.append([entries[i][0]] + self.lri(list(entries[i][1:]), self.current_run_board_states_red[list(self.current_run_board_states_red.keys())[i]][0], lr, BOARD_SIZE**2))
 
-					args = new_probs
-					sql = "INSERT OR REPLACE INTO states VALUES ({seq})".format(seq=','.join(['?']*len(args)))
+					sql = "INSERT OR REPLACE INTO states VALUES ({seq})".format(seq=','.join(['?']*(BOARD_SIZE**2+1)))
+
 					try:
-						lock.acquire(True)
-						c.execute(sql, args)
+						#lock.acquire(True)
+						c.executemany(sql, args)
 					finally:
-						lock.release()
+						pass#lock.release()
 				
 				if verbose: print(winner+" wins!")
 				
 
 			turn = 'R' if turn == 'B' else 'B'
+		nt = time.time() - t
+		#if nt > 5: print(nt)
 		return winner
 
 	def get_move_from_click(self):
@@ -311,14 +310,15 @@ class Hex:
 
 		return [round(x,5) for x in probabilities]
 
-	def run_lri(self, player, board):
+	def run_lri(self, player, board, c):
 		flat_board = self.flatten_board(board)
+		sql = "SELECT * FROM states WHERE state='%s'" % str(flat_board).replace("\'","")
 		try:
-			lock.acquire(True)
-			c.execute("SELECT * FROM states WHERE state='%s'" % str(flat_board).replace("\'",""))
+			#lock.acquire(True)
+			c.execute(sql)
 			result = c.fetchone()
 		finally:
-			lock.release()
+			pass#lock.release()
 		if result:
 			probabilities = result[1:]
 		else:
@@ -331,13 +331,13 @@ class Hex:
 					probabilities.append(0)
 
 			columns = '('+','.join('?' for _ in range(BOARD_SIZE**2+1))+')'
+			sql = "INSERT OR REPLACE INTO states VALUES " + columns
+			args = [str(flat_board).replace("\'","")] + probabilities
 			try:
-				lock.acquire(True)
-				c.execute("INSERT OR REPLACE INTO states VALUES "+columns, ([str(flat_board).replace("\'","")] + probabilities))
-				#c.execute("SELECT * FROM states WHERE state='%s'" % str(flat_board).replace("\'",""))
-				#print(c.fetchone())
+				#lock.acquire(True)
+				c.execute(sql, args)
 			finally:
-				lock.release()
+				pass#lock.release()
 
 		n = random.random()
 		for i in range(len(probabilities)):
@@ -358,10 +358,14 @@ class Hex:
 		return moves
 
 def run_threaded_games(game):
-	game.run(verbose=False)
+	conn = sqlite3.connect('hex.db', timeout=150)
+	game.run(conn, verbose=False)
+	conn.commit()
+	conn.close()
 
 def main():
-	
+	conn = sqlite3.connect('hex.db')
+	c = conn.cursor()
 	#"""
 	c.execute("DROP TABLE states;")
 	c.execute("CREATE TABLE IF NOT EXISTS states (state varchar(255) primary key);")
@@ -401,11 +405,12 @@ def main():
 
 	track_after = 1000
 
-	
-
 	if learn == '1':
+		#conn = sqlite3.connect('hex.db', check_same_thread=False)
+		#c = conn.cursor()
+
 		num_games = 1000
-		num_threads = 10
+		num_threads = 20
 		t = time.time()
 		pool = ThreadPool(num_threads)
 		results = pool.map(run_threaded_games, [Hex(Board((BOARD_SIZE, BOARD_SIZE)), None) for _ in range(num_games)])
@@ -439,8 +444,8 @@ if __name__ == '__main__':
 	try:
 		main()
 	except KeyboardInterrupt:
-		conn.commit()
-		conn.close()
+		#conn.commit()
+		#conn.close()
 
 		print('done')
 		try:
