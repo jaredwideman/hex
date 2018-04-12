@@ -6,6 +6,7 @@ import heapq
 import time
 import copy
 import sqlite3
+import MySQLdb as db
 
 from multiprocessing.dummy import Pool as ThreadPool 
 import threading
@@ -107,6 +108,20 @@ class Graphics:
 		rotated_ploygon.points = new_points
 		return rotated_ploygon
 
+def safe_execute(cursor, sql, args, many=False, num_attempts=10):
+	exception = None
+	for _ in range(num_attempts):
+		try:
+			if many:
+				cursor.executemany(sql, args)
+			else:
+				cursor.execute(sql, args)
+		except db.OperationalError as e:
+			#print('slipin')
+			time.sleep(1)
+			continue
+			
+
 class Hex:
 	def __init__(self, b, graphics):
 		self.b = b
@@ -114,7 +129,7 @@ class Hex:
 		self.current_run_board_states_red = {}
 		self.current_run_board_states_blue = {}
 
-	def run(self, conn, red=2, blue=2, lr=0.001, verbose=True):
+	def run(self, conn, red=2, blue=2, lr=0.001, verbose=True, learn=True):
 		t = time.time()
 		c = conn.cursor()
 		winner = False
@@ -129,55 +144,55 @@ class Hex:
 			self.play_move(move, turn)
 			winner = self.is_win_state()
 			if winner:
-				if winner == 'B':
-					args = [str(x).replace('\'','') for x in list(self.current_run_board_states_blue.keys())]
-					sql = "SELECT * FROM states WHERE state in ({seq})".format(seq=','.join(['?']*len(args)))
-					try:
-						#lock.acquire(True)
-						c.execute(sql, args)
-						entries = c.fetchall()
-					finally:
-						pass#lock.release()
+				if learn:
+					if winner == 'B':
+						args = [str(x).replace('\'','') for x in list(self.current_run_board_states_blue.keys())]
+						sql = "SELECT * FROM states WHERE state in ({seq})".format(seq=','.join(['%s']*len(args)))
+						try:
+							#lock.acquire(True)
+							safe_execute(c, sql, args)
+							entries = c.fetchall()
+						finally:
+							pass#lock.release()
 
-					args = []
-					for i in range(len(entries)):
-						args.append([entries[i][0]] + self.lri(list(entries[i][1:]), self.current_run_board_states_blue[list(self.current_run_board_states_blue.keys())[i]][0], lr, BOARD_SIZE**2))
+						args = []
+						for i in range(len(entries)):
+							args.append([entries[i][0]] + self.lri(list(entries[i][1:]), self.current_run_board_states_blue[list(self.current_run_board_states_blue.keys())[i]][0], lr, BOARD_SIZE**2))
 
-					sql = "INSERT OR REPLACE INTO states VALUES ({seq})".format(seq=','.join(['?']*(BOARD_SIZE**2+1)))
-					try:
-						#ock.acquire(True)
-						c.executemany(sql, args)
-					finally:
-						pass#lock.release()
-				else:
-					args = [str(x).replace('\'','') for x in list(self.current_run_board_states_blue.keys())]
-					sql = "SELECT * FROM states WHERE state in ({seq})".format(seq=','.join(['?']*len(args)))
-					try:
-						#lock.acquire(True)
-						c.execute(sql, args)
-						entries = c.fetchall()
-					finally:
-						pass#lock.release()
+						sql = "REPLACE INTO states VALUES ({seq})".format(seq=','.join(['%s']*(BOARD_SIZE**2+1)))
+						try:
+							#lock.acquire(True)
+							safe_execute(c, sql, args, many=True)
+						finally:
+							pass#lock.release()
+					else:
+						args = [str(x).replace('\'','') for x in list(self.current_run_board_states_blue.keys())]
+						sql = "SELECT * FROM states WHERE state in ({seq})".format(seq=','.join(['%s']*len(args)))
+						try:
+							#lock.acquire(True)
+							safe_execute(c, sql, args)
+							entries = c.fetchall()
+						finally:
+							pass#lock.release()
 
-					args = []
+						args = []
 
-					for i in range(len(entries)):
-						args.append([entries[i][0]] + self.lri(list(entries[i][1:]), self.current_run_board_states_red[list(self.current_run_board_states_red.keys())[i]][0], lr, BOARD_SIZE**2))
+						for i in range(len(entries)):
+							args.append([entries[i][0]] + self.lri(list(entries[i][1:]), self.current_run_board_states_red[list(self.current_run_board_states_red.keys())[i]][0], lr, BOARD_SIZE**2))
 
-					sql = "INSERT OR REPLACE INTO states VALUES ({seq})".format(seq=','.join(['?']*(BOARD_SIZE**2+1)))
+						sql = "REPLACE INTO states VALUES ({seq})".format(seq=','.join(['%s']*(BOARD_SIZE**2+1)))
 
-					try:
-						#lock.acquire(True)
-						c.executemany(sql, args)
-					finally:
-						pass#lock.release()
+						try:
+							#lock.acquire(True)
+							safe_execute(c, sql, args, many=True)
+						finally:
+							pass#lock.release()
 				
 				if verbose: print(winner+" wins!")
 				
 
 			turn = 'R' if turn == 'B' else 'B'
 		nt = time.time() - t
-		#if nt > 5: print(nt)
 		return winner
 
 	def get_move_from_click(self):
@@ -196,7 +211,7 @@ class Hex:
 				return score
 			v = -infinite
 			successors = self.get_successors(player, board)
-			nonlocal node_count
+			#nonlocal node_count
 			i = 0
 			for (_,s) in successors:
 				node_count +=1
@@ -212,7 +227,7 @@ class Hex:
 				return score
 			v = infinite
 			successors = self.get_successors(player, board)
-			nonlocal node_count
+			#nonlocal node_count
 			for (_,s) in successors:
 				node_count += 1
 				v = min(v, max_value(s, alpha, beta, ply-1))
@@ -315,7 +330,8 @@ class Hex:
 		sql = "SELECT * FROM states WHERE state='%s'" % str(flat_board).replace("\'","")
 		try:
 			#lock.acquire(True)
-			c.execute(sql)
+			safe_execute(c, sql, None)
+			#c.execute(sql)
 			result = c.fetchone()
 		finally:
 			pass#lock.release()
@@ -330,12 +346,14 @@ class Hex:
 				else:
 					probabilities.append(0)
 
-			columns = '('+','.join('?' for _ in range(BOARD_SIZE**2+1))+')'
-			sql = "INSERT OR REPLACE INTO states VALUES " + columns
+			columns = '('+','.join('%s' for _ in range(BOARD_SIZE**2+1))+')'
+			sql = "REPLACE INTO states VALUES " + columns
 			args = [str(flat_board).replace("\'","")] + probabilities
 			try:
 				#lock.acquire(True)
+				safe_execute(c, sql, args)
 				c.execute(sql, args)
+
 			finally:
 				pass#lock.release()
 
@@ -358,21 +376,32 @@ class Hex:
 		return moves
 
 def run_threaded_games(game):
-	conn = sqlite3.connect('hex.db', timeout=150)
+	conn = db.connect(host='localhost',
+                             user='root',
+                             password='',
+                             db='hex',
+                             charset='utf8mb4')
+	#conn = db.connect(database='jaredwideman', user='postgres', host='localhost', password='pass123', port="5432")
+	#conn = sqlite3.connect('hex.db', timeout=10)
 	game.run(conn, verbose=False)
 	conn.commit()
 	conn.close()
 
 def main():
-	conn = sqlite3.connect('hex.db')
+	conn = db.connect(host='localhost',
+                             user='root',
+                             password='',
+                             db='hex',
+                             charset='utf8mb4')	#conn = sqlite3.connect('hex.db')
 	c = conn.cursor()
-	#"""
+	"""
 	c.execute("DROP TABLE states;")
 	c.execute("CREATE TABLE IF NOT EXISTS states (state varchar(255) primary key);")
 	for i in range(BOARD_SIZE):
 		for j in range(BOARD_SIZE):
-			c.execute("ALTER TABLE states ADD `%s%s` real" % (i,j))
-	#"""
+			c.execute("ALTER TABLE states ADD c%s%s real" % (i,j))
+	"""
+	conn.commit()
 	while True:
 		p1 = input("\nWho is playing as RED?\n  1. Human\n  2. AI\n")
 		try:
@@ -399,7 +428,7 @@ def main():
 	else:
 		learn = 2
 
-	iterations = 500000
+	iterations = 5000
 
 	results = []
 
@@ -409,7 +438,7 @@ def main():
 		#conn = sqlite3.connect('hex.db', check_same_thread=False)
 		#c = conn.cursor()
 
-		num_games = 1000
+		num_games = 300
 		num_threads = 20
 		t = time.time()
 		pool = ThreadPool(num_threads)
@@ -428,16 +457,17 @@ def main():
 			b = Board((BOARD_SIZE,BOARD_SIZE))
 			g = Graphics(b)
 			h = Hex(b, g)
-			winner = h.run(p1, p2, verbose=True)
+			winner = h.run(conn, p1, p2, verbose=True, learn=False)
 			results.append(winner)
 			if len(results) > 10: results = results[len(results)-10:]
 			r_count = 0
 			for i in range(len(results)):
 				if results[i] == 'R': r_count+=1
 			print("red last 10 win% = " + str(100*r_count/min(10, len(results)))+ "%")
-
-	conn.commit()
+	
 	conn.close()
+
+	
 
 
 if __name__ == '__main__':
